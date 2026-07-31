@@ -46,11 +46,13 @@
 // ---------- Stockage ----------
 const STORAGE_KEY = "mes-fiches-data-v1";
 function loadData(){
+  let d = {decks:[], cards:[], dailyLimit:20};
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw) d = {...d, ...JSON.parse(raw)};
   }catch(e){}
-  return {decks:[], cards:[]};
+  if(!d.dailyLimit) d.dailyLimit = 20;
+  return d;
 }
 function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
 
@@ -220,13 +222,25 @@ function answerCard(id, known){
   c.nextReview = nextReviewDate(c.box);
   saveData();
 }
+function dueCount(pool){
+  const raw = pool.filter(isDue).length;
+  return data.dailyLimit ? Math.min(raw, data.dailyLimit) : raw;
+}
 function startReview(deckId){
   const pool = deckId==='all' ? data.cards : data.cards.filter(c=>c.deckId===deckId);
   if(pool.length===0) return;
-  const due = pool.filter(isDue);
+  let due = pool.filter(isDue).sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
+  if(data.dailyLimit && due.length > data.dailyLimit) due = due.slice(0, data.dailyLimit);
   const queue = shuffle(due.length>0?due:pool);
   screen = {name:"review", queue, index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId};
   render();
+}
+function openDailyLimitPrompt(){
+  const current = data.dailyLimit || 20;
+  const val = window.prompt("Combien de cartes au maximum veux-tu réviser par session ? (0 = illimité)", String(current));
+  if(val===null) return;
+  const n = parseInt(val,10);
+  if(!isNaN(n) && n>=0){ data.dailyLimit = n===0 ? null : n; saveData(); render(); }
 }
 
 // ---------- Écrans ----------
@@ -234,11 +248,19 @@ function screenHome(){
   const wrap = h('div');
   const headRow = h('div',{style:{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:'4px'}},[
     h('h1',{class:'display',style:{fontSize:'30px',margin:0}},'Mes fiches'),
-    data.decks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
+    h('div',{style:{display:'flex',gap:'12px'}},[
+      data.cards.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:openDailyLimitPrompt}, 'Limite') : null,
+      data.decks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
+    ])
   ]);
   wrap.appendChild(headRow);
-  const total = data.cards.length, due = data.cards.filter(isDue).length;
-  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'24px'}}, total===0?"Créez un dossier pour commencer.":`${total} carte${total>1?'s':''} · ${due} à revoir aujourd'hui`));
+  const total = data.cards.length;
+  const rawDue = data.cards.filter(isDue).length;
+  const shownDue = dueCount(data.cards);
+  const dueLabel = data.dailyLimit && rawDue > data.dailyLimit
+    ? `${shownDue} à revoir aujourd'hui (+${rawDue - shownDue} en réserve)`
+    : `${shownDue} à revoir aujourd'hui`;
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'24px'}}, total===0?"Créez un dossier pour commencer.":`${total} carte${total>1?'s':''} · ${dueLabel}`));
 
   if(total>0){
     wrap.appendChild(h('button',{class:'btn-primary',style:{marginBottom:'24px',justifyContent:'space-between'}, onclick:()=>startReview('all')},[
@@ -250,7 +272,7 @@ function screenHome(){
   const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'12px'}});
   data.decks.forEach(deck=>{
     const deckCards = data.cards.filter(c=>c.deckId===deck.id);
-    const dueN = deckCards.filter(isDue).length;
+    const dueN = dueCount(deckCards);
     const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
     const tile = h('div',{class:'deck-tile', style:{borderLeft:`6px solid ${color}`}});
     if(!manageMode) tile.onclick = ()=>{ screen={name:'deck',deckId:deck.id}; render(); };
@@ -318,7 +340,7 @@ function screenDeck(deckId){
   if(!deck){ screen={name:'home'}; return screenHome(); }
   const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
   const cards = data.cards.filter(c=>c.deckId===deckId);
-  const due = cards.filter(isDue).length;
+  const due = dueCount(cards);
   const notKnown = cards.filter(c=>c.box===1).length;
 
   const wrap = h('div');
