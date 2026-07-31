@@ -124,7 +124,10 @@ const ICONS = {
   shuffle:'<polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>',
   sparkle:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/>',
   upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
-  volume:'<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>'
+  volume:'<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>',
+  chart:'<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
 };
 
 // ---------- Import de fichier (CSV / Excel) ----------
@@ -242,15 +245,59 @@ function openDailyLimitPrompt(){
   const n = parseInt(val,10);
   if(!isNaN(n) && n>=0){ data.dailyLimit = n===0 ? null : n; saveData(); render(); }
 }
+function startReviewWeak(deckId){
+  const pool = deckId==='all' ? data.cards : data.cards.filter(c=>c.deckId===deckId);
+  const weak = pool.filter(c=>c.box===1);
+  if(weak.length===0) return;
+  const queue = shuffle(weak);
+  screen = {name:"review", queue, index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:false, deckId};
+  render();
+}
+function confirmDeleteDeck(deck){
+  if(window.confirm(`Supprimer le dossier "${deck.name}" et toutes ses cartes ? Cette action est définitive.`)) deleteDeck(deck.id);
+}
+function confirmDeleteCard(card){
+  if(window.confirm("Supprimer cette carte ? Cette action est définitive.")) deleteCard(card.id);
+}
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function exportBackup(){
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mes-fiches-sauvegarde-${todayStr()}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 1500);
+}
+function importBackupFile(file){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    let parsed;
+    try{ parsed = JSON.parse(e.target.result); }
+    catch(err){ window.alert("Ce fichier n'est pas une sauvegarde valide."); return; }
+    if(!parsed || !Array.isArray(parsed.decks) || !Array.isArray(parsed.cards)){
+      window.alert("Ce fichier ne semble pas être une sauvegarde de Mes fiches.");
+      return;
+    }
+    if(!window.confirm("Restaurer cette sauvegarde remplacera toutes tes fiches actuelles sur cet appareil. Continuer ?")) return;
+    data = {decks:parsed.decks, cards:parsed.cards, dailyLimit: parsed.dailyLimit || 20};
+    saveData();
+    screen = {name:'home'};
+    render();
+    window.alert("Sauvegarde restaurée !");
+  };
+  reader.readAsText(file, 'UTF-8');
+}
 
 // ---------- Écrans ----------
 function screenHome(){
   const wrap = h('div');
-  const headRow = h('div',{style:{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:'4px'}},[
+  const headRow = h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'4px'}},[
     h('h1',{class:'display',style:{fontSize:'30px',margin:0}},'Mes fiches'),
-    h('div',{style:{display:'flex',gap:'12px'}},[
-      data.cards.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:openDailyLimitPrompt}, 'Limite') : null,
-      data.decks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
+    h('div',{style:{display:'flex',gap:'6px',alignItems:'center'}},[
+      data.cards.length ? h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:()=>{screen={name:'stats'}; render();}}, icon(ICONS.chart,20)) : null,
+      h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:()=>{screen={name:'settings'}; render();}}, icon(ICONS.settings,20)),
+      data.decks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)',marginLeft:'2px'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
     ])
   ]);
   wrap.appendChild(headRow);
@@ -293,7 +340,7 @@ function screenHome(){
       langSelect.onchange = ()=>{ deck.lang = langSelect.value; saveData(); };
       btns.appendChild(langSelect);
       btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:(e)=>{e.stopPropagation(); openRenameDeck(deck);}}, icon(ICONS.pencil,16)));
-      btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:(e)=>{e.stopPropagation(); deleteDeck(deck.id);}}, icon(ICONS.trash,16)));
+      btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:(e)=>{e.stopPropagation(); confirmDeleteDeck(deck);}}, icon(ICONS.trash,16)));
       tile.appendChild(btns);
     } else if(dueN>0){
       tile.appendChild(h('div',{style:{fontSize:'11px',borderRadius:'999px',padding:'4px 8px',background:color,color:'white'}}, String(dueN)));
@@ -349,8 +396,12 @@ function screenDeck(deckId){
   wrap.appendChild(h('p',{class:'small',style:{marginBottom:'20px'}}, `${cards.length} carte${cards.length!==1?'s':''}` + (notKnown>0?` · ${notKnown} pas encore sues`:'')));
 
   if(cards.length>0){
-    wrap.appendChild(h('button',{class:'btn-primary',style:{background:color,marginBottom:'20px'}, onclick:()=>startReview(deckId)},
+    wrap.appendChild(h('button',{class:'btn-primary',style:{background:color,marginBottom:'10px'}, onclick:()=>startReview(deckId)},
       h('span',{class:'display',style:{fontSize:'18px'}}, due>0?`Réviser (${due})`:'Tout revoir')));
+    if(notKnown>0){
+      wrap.appendChild(h('button',{class:'btn-outline',style:{marginBottom:'20px',borderColor:'var(--red)',color:'var(--red)'}, onclick:()=>startReviewWeak(deckId)},
+        `Réviser les mots pas encore sus (${notKnown})`));
+    }
   }
 
   const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}});
@@ -360,7 +411,7 @@ function screenDeck(deckId){
     const dotColor = card.box===1 ? 'var(--red)' : (card.box>=MAX_BOX ? color : 'var(--muted)');
     row.appendChild(h('div',{class:'dot',style:{background:dotColor}}));
     row.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:()=>{screen={name:'cardForm',deckId,cardId:card.id}; render();}}, icon(ICONS.pencil,15)));
-    row.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:()=>deleteCard(card.id)}, icon(ICONS.trash,15)));
+    row.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:()=>confirmDeleteCard(card)}, icon(ICONS.trash,15)));
     list.appendChild(row);
   });
   wrap.appendChild(list);
@@ -572,6 +623,88 @@ function screenSummary(){
   return wrap;
 }
 
+function screenSettings(){
+  const wrap = h('div');
+  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'home'}; render();}},[icon(ICONS.back,16),'Accueil']));
+  wrap.appendChild(h('h1',{class:'display',style:{fontSize:'24px',margin:'0 0 20px'}}, 'Réglages'));
+
+  wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Révision'));
+  const limitRow = h('div',{class:'card-row',style:{marginBottom:'24px'}},[
+    h('div',{style:{flex:'1'}},[
+      h('div',{style:{fontSize:'14px'}}, 'Limite par session'),
+      h('div',{class:'small'}, `${data.dailyLimit ? data.dailyLimit+' cartes max' : 'Illimité'}`)
+    ]),
+    h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:openDailyLimitPrompt}, icon(ICONS.pencil,16))
+  ]);
+  wrap.appendChild(limitRow);
+
+  wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Sauvegarde'));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'12px'}}, "Tes fiches ne sont stockées que sur cet appareil. Exporte une sauvegarde régulièrement pour ne rien perdre, ou pour les transférer sur un autre appareil."));
+  wrap.appendChild(h('button',{class:'btn-outline',style:{marginBottom:'10px'}, onclick:exportBackup},[icon(ICONS.download,18),'Exporter mes fiches (.json)']));
+
+  const importInput = h('input',{type:'file', accept:'.json', style:{display:'none'}});
+  importInput.onchange = ()=>{ const f = importInput.files[0]; if(f) importBackupFile(f); };
+  wrap.appendChild(importInput);
+  wrap.appendChild(h('button',{class:'btn-outline', onclick:()=>importInput.click()},[icon(ICONS.upload,18),'Importer une sauvegarde']));
+
+  return wrap;
+}
+
+function screenStats(){
+  const wrap = h('div');
+  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'home'}; render();}},[icon(ICONS.back,16),'Accueil']));
+  wrap.appendChild(h('h1',{class:'display',style:{fontSize:'24px',margin:'0 0 20px'}}, 'Statistiques'));
+
+  const total = data.cards.length;
+  if(total===0){
+    wrap.appendChild(h('div',{class:'small'}, "Pas encore de cartes à analyser."));
+    return wrap;
+  }
+  const mastered = data.cards.filter(c=>c.box>=MAX_BOX).length;
+  const notKnown = data.cards.filter(c=>c.box===1).length;
+  const inProgress = total - mastered - notKnown;
+
+  const summaryRow = h('div',{style:{display:'flex',gap:'8px',marginBottom:'24px'}});
+  const statBox = (label, value, col) => h('div',{class:'card-row',style:{flex:'1',flexDirection:'column',alignItems:'flex-start',gap:'2px'}},[
+    h('div',{class:'display',style:{fontSize:'22px',color:col}}, String(value)),
+    h('div',{class:'small'}, label)
+  ]);
+  summaryRow.appendChild(statBox('maîtrisées', mastered, 'var(--green)'));
+  summaryRow.appendChild(statBox('en cours', inProgress, 'var(--ink)'));
+  summaryRow.appendChild(statBox('pas sues', notKnown, 'var(--red)'));
+  wrap.appendChild(summaryRow);
+
+  wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'10px'}}, 'Répartition par case (1 = jamais sue, 6 = maîtrisée)'));
+  const barsWrap = h('div',{style:{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'28px'}});
+  for(let box=1; box<=MAX_BOX; box++){
+    const n = data.cards.filter(c=>c.box===box).length;
+    const pct = total>0 ? Math.round((n/total)*100) : 0;
+    const col = box===1 ? 'var(--red)' : (box>=MAX_BOX ? 'var(--green)' : 'var(--muted)');
+    barsWrap.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'8px'}},[
+      h('div',{class:'mono small',style:{width:'16px'}}, String(box)),
+      h('div',{style:{flex:'1',background:'white',borderRadius:'6px',height:'18px',overflow:'hidden'}},
+        h('div',{style:{width:pct+'%',height:'100%',background:col}})
+      ),
+      h('div',{class:'small',style:{width:'34px',textAlign:'right'}}, String(n))
+    ]));
+  }
+  wrap.appendChild(barsWrap);
+
+  wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'10px'}}, 'Par dossier'));
+  const deckList = h('div',{style:{display:'flex',flexDirection:'column',gap:'8px'}});
+  data.decks.forEach(deck=>{
+    const dc = data.cards.filter(c=>c.deckId===deck.id);
+    const dm = dc.filter(c=>c.box>=MAX_BOX).length;
+    const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
+    deckList.appendChild(h('div',{class:'card-row'},[
+      h('div',{style:{flex:'1',fontSize:'14px'}}, deck.name),
+      h('div',{class:'small'}, `${dm} / ${dc.length} maîtrisées`)
+    ]));
+  });
+  wrap.appendChild(deckList);
+  return wrap;
+}
+
 // ---------- Rendu principal ----------
 function render(){
   const app = document.getElementById('app');
@@ -582,6 +715,8 @@ function render(){
   else if(screen.name==='cardForm') node = screenCardForm(screen.deckId, screen.cardId);
   else if(screen.name==='review') node = screenReview();
   else if(screen.name==='reviewSummary') node = screenSummary();
+  else if(screen.name==='settings') node = screenSettings();
+  else if(screen.name==='stats') node = screenStats();
   else node = screenHome();
   app.appendChild(node);
 }
