@@ -173,6 +173,19 @@ function rowsToCards(rows, deckId){
   });
   return cards;
 }
+function normWord(s){ return (s||'').toString().trim(); }
+function dedupeCards(candidateCards, deckId){
+  const existing = new Set(data.cards.filter(c=>c.deckId===deckId).map(c=>normWord(c.recto)));
+  const kept = [];
+  let skipped = 0;
+  candidateCards.forEach(c=>{
+    const key = normWord(c.recto);
+    if(existing.has(key)){ skipped++; return; }
+    existing.add(key);
+    kept.push(c);
+  });
+  return {kept, skipped};
+}
 function importFileToDeck(file, deckId, onDone){
   const name = file.name.toLowerCase();
   const reader = new FileReader();
@@ -182,10 +195,11 @@ function importFileToDeck(file, deckId, onDone){
         const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-        const cards = rowsToCards(rows, deckId);
-        data.cards = data.cards.concat(cards);
+        const candidates = rowsToCards(rows, deckId);
+        const {kept, skipped} = dedupeCards(candidates, deckId);
+        data.cards = data.cards.concat(kept);
         saveData();
-        onDone(cards.length);
+        onDone(kept.length, null, skipped);
       }catch(err){ onDone(0, err); }
     };
     reader.onerror = ()=>onDone(0, true);
@@ -194,10 +208,11 @@ function importFileToDeck(file, deckId, onDone){
     reader.onload = (e)=>{
       try{
         const rows = parseCSV(e.target.result);
-        const cards = rowsToCards(rows, deckId);
-        data.cards = data.cards.concat(cards);
+        const candidates = rowsToCards(rows, deckId);
+        const {kept, skipped} = dedupeCards(candidates, deckId);
+        data.cards = data.cards.concat(kept);
         saveData();
-        onDone(cards.length);
+        onDone(kept.length, null, skipped);
       }catch(err){ onDone(0, err); }
     };
     reader.onerror = ()=>onDone(0, true);
@@ -426,11 +441,13 @@ function screenDeck(deckId){
   importInput.onchange = ()=>{
     const file = importInput.files[0];
     if(!file) return;
-    importFileToDeck(file, deckId, (count, err)=>{
+    importFileToDeck(file, deckId, (count, err, skipped)=>{
       if(err){ window.alert("Le fichier n'a pas pu être lu. Vérifie qu'il s'agit bien d'un fichier CSV ou Excel, avec une 1ère ligne de titres."); return; }
       screen = {name:'deck', deckId};
       render();
-      window.alert(count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune carte trouvée dans ce fichier. Vérifie que la colonne A contient bien un mot par ligne.");
+      let msg = count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune nouvelle carte importée.";
+      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} dans ce dossier, ignorée${skipped>1?'s':''})`;
+      window.alert(msg);
     });
   };
   wrap.appendChild(importInput);
