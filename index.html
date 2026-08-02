@@ -221,12 +221,30 @@ function importFileToDeck(file, deckId, onDone){
 }
 
 // ---------- Actions ----------
-function addDeck(name, lang){
-  data.decks.push({id:uid(), name, colorIdx:data.decks.length%DECK_COLORS.length, lang: lang || 'fr-FR', createdAt:Date.now()});
+function addDeck(name, lang, parentId){
+  data.decks.push({id:uid(), name, colorIdx:data.decks.length%DECK_COLORS.length, lang: lang || 'fr-FR', parentId: parentId || null, createdAt:Date.now()});
   saveData(); render();
 }
 function renameDeck(id,name){ const d=data.decks.find(x=>x.id===id); if(d) d.name=name; saveData(); render(); }
-function deleteDeck(id){ data.decks=data.decks.filter(x=>x.id!==id); data.cards=data.cards.filter(c=>c.deckId!==id); saveData(); render(); }
+function getDescendantDeckIds(deckId){
+  const ids = [deckId];
+  const stack = [deckId];
+  while(stack.length){
+    const cur = stack.pop();
+    data.decks.filter(d=>d.parentId===cur).forEach(child=>{ ids.push(child.id); stack.push(child.id); });
+  }
+  return ids;
+}
+function cardsForDeck(deckId){
+  const ids = getDescendantDeckIds(deckId);
+  return data.cards.filter(c=>ids.includes(c.deckId));
+}
+function deleteDeck(id){
+  const ids = getDescendantDeckIds(id);
+  data.decks = data.decks.filter(x=>!ids.includes(x.id));
+  data.cards = data.cards.filter(c=>!ids.includes(c.deckId));
+  saveData(); render();
+}
 function upsertCard(card){
   const i = data.cards.findIndex(c=>c.id===card.id);
   if(i>=0) data.cards[i]=card; else data.cards.push(card);
@@ -245,7 +263,7 @@ function dueCount(pool){
   return data.dailyLimit ? Math.min(raw, data.dailyLimit) : raw;
 }
 function startReview(deckId){
-  const pool = deckId==='all' ? data.cards : data.cards.filter(c=>c.deckId===deckId);
+  const pool = deckId==='all' ? data.cards : cardsForDeck(deckId);
   if(pool.length===0) return;
   let due = pool.filter(isDue).sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
   if(data.dailyLimit && due.length > data.dailyLimit) due = due.slice(0, data.dailyLimit);
@@ -261,7 +279,7 @@ function openDailyLimitPrompt(){
   if(!isNaN(n) && n>=0){ data.dailyLimit = n===0 ? null : n; saveData(); render(); }
 }
 function startReviewWeak(deckId){
-  const pool = deckId==='all' ? data.cards : data.cards.filter(c=>c.deckId===deckId);
+  const pool = deckId==='all' ? data.cards : cardsForDeck(deckId);
   const weak = pool.filter(c=>c.box===1);
   if(weak.length===0) return;
   const queue = shuffle(weak);
@@ -269,7 +287,11 @@ function startReviewWeak(deckId){
   render();
 }
 function confirmDeleteDeck(deck){
-  if(window.confirm(`Supprimer le dossier "${deck.name}" et toutes ses cartes ? Cette action est définitive.`)) deleteDeck(deck.id);
+  const hasChildren = data.decks.some(d=>d.parentId===deck.id);
+  const msg = hasChildren
+    ? `Supprimer le dossier "${deck.name}", tous ses sous-dossiers et toutes leurs cartes ? Cette action est définitive.`
+    : `Supprimer le dossier "${deck.name}" et toutes ses cartes ? Cette action est définitive.`;
+  if(window.confirm(msg)) deleteDeck(deck.id);
 }
 function confirmDeleteCard(card){
   if(window.confirm("Supprimer cette carte ? Cette action est définitive.")) deleteCard(card.id);
@@ -304,15 +326,49 @@ function importBackupFile(file){
   reader.readAsText(file, 'UTF-8');
 }
 
+function deckTile(deck){
+  const deckCards = cardsForDeck(deck.id);
+  const dueN = dueCount(deckCards);
+  const childCount = data.decks.filter(d=>d.parentId===deck.id).length;
+  const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
+  const tile = h('div',{class:'deck-tile', style:{borderLeft:`6px solid ${color}`}});
+  if(!manageMode) tile.onclick = ()=>{ screen={name:'deck',deckId:deck.id}; render(); };
+  const subLabel = childCount>0 ? `${childCount} sous-dossier${childCount>1?'s':''} · ` : '';
+  const info = h('div',{style:{flex:'1',minWidth:'0'}},[
+    h('div',{class:'display',style:{fontSize:'17px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, deck.name),
+    h('div',{class:'small'}, subLabel + `${deckCards.length} carte${deckCards.length!==1?'s':''}` + (dueN>0?` · ${dueN} à revoir`:(deckCards.length>0?' · à jour':'')))
+  ]);
+  tile.appendChild(info);
+  if(manageMode){
+    const btns = h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}});
+    const langSelect = h('select',{style:{fontSize:'11px',color:'var(--muted)',maxWidth:'88px'}});
+    LANG_OPTIONS.forEach(opt=>{
+      const o = h('option',{value:opt.code}, opt.label);
+      if((deck.lang||'fr-FR')===opt.code) o.setAttribute('selected','selected');
+      langSelect.appendChild(o);
+    });
+    langSelect.onclick = (e)=>e.stopPropagation();
+    langSelect.onchange = ()=>{ deck.lang = langSelect.value; saveData(); };
+    btns.appendChild(langSelect);
+    btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:(e)=>{e.stopPropagation(); openRenameDeck(deck);}}, icon(ICONS.pencil,16)));
+    btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:(e)=>{e.stopPropagation(); confirmDeleteDeck(deck);}}, icon(ICONS.trash,16)));
+    tile.appendChild(btns);
+  } else if(dueN>0){
+    tile.appendChild(h('div',{style:{fontSize:'11px',borderRadius:'999px',padding:'4px 8px',background:color,color:'white'}}, String(dueN)));
+  }
+  return tile;
+}
+
 // ---------- Écrans ----------
 function screenHome(){
   const wrap = h('div');
+  const topDecks = data.decks.filter(d=>!d.parentId);
   const headRow = h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'4px'}},[
     h('h1',{class:'display',style:{fontSize:'30px',margin:0}},'Mes fiches'),
     h('div',{style:{display:'flex',gap:'6px',alignItems:'center'}},[
       data.cards.length ? h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:()=>{screen={name:'stats'}; render();}}, icon(ICONS.chart,20)) : null,
       h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:()=>{screen={name:'settings'}; render();}}, icon(ICONS.settings,20)),
-      data.decks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)',marginLeft:'2px'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
+      topDecks.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)',marginLeft:'2px'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
     ])
   ]);
   wrap.appendChild(headRow);
@@ -332,52 +388,23 @@ function screenHome(){
   }
 
   const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'12px'}});
-  data.decks.forEach(deck=>{
-    const deckCards = data.cards.filter(c=>c.deckId===deck.id);
-    const dueN = dueCount(deckCards);
-    const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
-    const tile = h('div',{class:'deck-tile', style:{borderLeft:`6px solid ${color}`}});
-    if(!manageMode) tile.onclick = ()=>{ screen={name:'deck',deckId:deck.id}; render(); };
-    const info = h('div',{style:{flex:'1',minWidth:'0'}},[
-      h('div',{class:'display',style:{fontSize:'17px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, deck.name),
-      h('div',{class:'small'}, `${deckCards.length} carte${deckCards.length!==1?'s':''}` + (dueN>0?` · ${dueN} à revoir`:(deckCards.length>0?' · à jour':'')))
-    ]);
-    tile.appendChild(info);
-    if(manageMode){
-      const btns = h('div',{style:{display:'flex',gap:'4px',alignItems:'center'}});
-      const langSelect = h('select',{style:{fontSize:'11px',color:'var(--muted)',maxWidth:'88px'}});
-      LANG_OPTIONS.forEach(opt=>{
-        const o = h('option',{value:opt.code}, opt.label);
-        if((deck.lang||'fr-FR')===opt.code) o.setAttribute('selected','selected');
-        langSelect.appendChild(o);
-      });
-      langSelect.onclick = (e)=>e.stopPropagation();
-      langSelect.onchange = ()=>{ deck.lang = langSelect.value; saveData(); };
-      btns.appendChild(langSelect);
-      btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:(e)=>{e.stopPropagation(); openRenameDeck(deck);}}, icon(ICONS.pencil,16)));
-      btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:(e)=>{e.stopPropagation(); confirmDeleteDeck(deck);}}, icon(ICONS.trash,16)));
-      tile.appendChild(btns);
-    } else if(dueN>0){
-      tile.appendChild(h('div',{style:{fontSize:'11px',borderRadius:'999px',padding:'4px 8px',background:color,color:'white'}}, String(dueN)));
-    }
-    list.appendChild(tile);
-  });
+  topDecks.forEach(deck=> list.appendChild(deckTile(deck)));
   wrap.appendChild(list);
 
-  if(data.decks.length===0){
+  if(topDecks.length===0){
     wrap.appendChild(h('div',{style:{border:'1px dashed var(--muted)',borderRadius:'12px',padding:'24px',textAlign:'center',color:'var(--muted)',marginTop:'8px'}}, "Aucun dossier pour l'instant. Créez-en un pour ranger vos premières fiches."));
   }
 
   const addZone = h('div',{style:{marginTop:'12px'}});
-  addZone.appendChild(h('button',{class:'btn-outline', onclick:()=>openNewDeckForm(addZone)},[icon(ICONS.plus,18),'Nouveau dossier']));
+  addZone.appendChild(h('button',{class:'btn-outline', onclick:()=>openNewDeckForm(addZone, null)},[icon(ICONS.plus,18),'Nouveau dossier']));
   wrap.appendChild(addZone);
 
   return wrap;
 }
 
-function openNewDeckForm(container){
+function openNewDeckForm(container, parentId){
   container.innerHTML='';
-  const input = h('input',{placeholder:"Nom du dossier (ex : Vocabulaire anglais)", style:{fontSize:'14px'}});
+  const input = h('input',{placeholder: parentId ? "Nom du sous-dossier (ex : Vocabulaire)" : "Nom du dossier (ex : Niveau 1)", style:{fontSize:'14px'}});
   const select = h('select',{style:{fontSize:'13px',color:'var(--muted)',maxWidth:'110px'}});
   LANG_OPTIONS.forEach(opt=>{
     const o = h('option',{value:opt.code}, opt.label);
@@ -386,7 +413,7 @@ function openNewDeckForm(container){
   const row = h('div',{class:'card-row'},[
     input,
     select,
-    h('button',{class:'icon-btn', onclick:()=>{ if(input.value.trim()) addDeck(input.value.trim(), select.value); }}, icon(ICONS.check,16)),
+    h('button',{class:'icon-btn', onclick:()=>{ if(input.value.trim()) addDeck(input.value.trim(), select.value, parentId||null); }}, icon(ICONS.check,16)),
     h('button',{class:'icon-btn', onclick:()=>render()}, icon(ICONS.x,16))
   ]);
   container.appendChild(row);
@@ -401,16 +428,23 @@ function screenDeck(deckId){
   const deck = data.decks.find(d=>d.id===deckId);
   if(!deck){ screen={name:'home'}; return screenHome(); }
   const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
-  const cards = data.cards.filter(c=>c.deckId===deckId);
-  const due = dueCount(cards);
-  const notKnown = cards.filter(c=>c.box===1).length;
+  const children = data.decks.filter(d=>d.parentId===deckId);
+  const directCards = data.cards.filter(c=>c.deckId===deckId);
+  const allCards = cardsForDeck(deckId);
+  const due = dueCount(allCards);
+  const notKnown = allCards.filter(c=>c.box===1).length;
+  const backTarget = deck.parentId ? {name:'deck', deckId: deck.parentId} : {name:'home'};
 
   const wrap = h('div');
-  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'home'}; render();}},[icon(ICONS.back,16),'Dossiers']));
+  const headerRow = h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'16px'}},[
+    h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)'}, onclick:()=>{manageMode=false; screen=backTarget; render();}},[icon(ICONS.back,16), deck.parentId ? 'Retour' : 'Dossiers']),
+    children.length ? h('button',{style:{fontSize:'14px',color:'var(--muted)'}, onclick:()=>{manageMode=!manageMode; render();}}, manageMode?'Terminé':'Gérer') : null
+  ]);
+  wrap.appendChild(headerRow);
   wrap.appendChild(h('h1',{class:'display',style:{fontSize:'24px',color,margin:'0 0 4px'}}, deck.name));
-  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'20px'}}, `${cards.length} carte${cards.length!==1?'s':''}` + (notKnown>0?` · ${notKnown} pas encore sues`:'')));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'20px'}}, `${allCards.length} carte${allCards.length!==1?'s':''}` + (notKnown>0?` · ${notKnown} pas encore sues`:'')));
 
-  if(cards.length>0){
+  if(allCards.length>0){
     wrap.appendChild(h('button',{class:'btn-primary',style:{background:color,marginBottom:'10px'}, onclick:()=>startReview(deckId)},
       h('span',{class:'display',style:{fontSize:'18px'}}, due>0?`Réviser (${due})`:'Tout revoir')));
     if(notKnown>0){
@@ -419,8 +453,22 @@ function screenDeck(deckId){
     }
   }
 
+  if(children.length>0){
+    wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Sous-dossiers'));
+    const subList = h('div',{style:{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}});
+    children.forEach(child=> subList.appendChild(deckTile(child)));
+    wrap.appendChild(subList);
+  }
+
+  const addSubZone = h('div',{style:{marginBottom:'20px'}});
+  addSubZone.appendChild(h('button',{class:'btn-outline', onclick:()=>openNewDeckForm(addSubZone, deckId)},[icon(ICONS.plus,18),'Nouveau sous-dossier']));
+  wrap.appendChild(addSubZone);
+
+  if(directCards.length>0 || children.length===0){
+    wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Cartes dans ce dossier'));
+  }
   const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}});
-  cards.forEach(card=>{
+  directCards.forEach(card=>{
     const row = h('div',{class:'card-row'});
     row.appendChild(h('div',{class:'mono',style:{flex:'1',minWidth:'0',fontSize:'14px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, card.recto));
     const dotColor = card.box===1 ? 'var(--red)' : (card.box>=MAX_BOX ? color : 'var(--muted)');
@@ -431,8 +479,8 @@ function screenDeck(deckId){
   });
   wrap.appendChild(list);
 
-  if(cards.length===0){
-    wrap.appendChild(h('div',{style:{border:'1px dashed var(--muted)',borderRadius:'12px',padding:'24px',textAlign:'center',color:'var(--muted)',marginBottom:'16px'}}, 'Ce dossier est vide. Ajoutez votre première carte.'));
+  if(directCards.length===0 && children.length===0){
+    wrap.appendChild(h('div',{style:{border:'1px dashed var(--muted)',borderRadius:'12px',padding:'24px',textAlign:'center',color:'var(--muted)',marginBottom:'16px'}}, 'Ce dossier est vide. Ajoutez une carte ou un sous-dossier.'));
   }
 
   wrap.appendChild(h('button',{class:'btn-outline', onclick:()=>{screen={name:'cardForm',deckId,cardId:null}; render();}},[icon(ICONS.plus,18),'Nouvelle carte']));
@@ -452,7 +500,7 @@ function screenDeck(deckId){
   };
   wrap.appendChild(importInput);
   wrap.appendChild(h('button',{class:'btn-outline', style:{marginTop:'8px'}, onclick:()=>importInput.click()},[icon(ICONS.upload,18),'Importer un fichier (Excel/CSV)']));
-  wrap.appendChild(h('div',{class:'small',style:{textAlign:'center',marginTop:'8px'}}, "Colonne A = recto, colonnes suivantes = verso (1 pour une définition simple, plusieurs pour des champs). 1ère ligne = titres."));
+  wrap.appendChild(h('div',{class:'small',style:{textAlign:'center',marginTop:'8px'}}, "Colonne A = recto, colonnes suivantes = verso (1 pour une définition simple, plusieurs pour des champs). 1ère ligne = titres. L'import se fait directement dans ce dossier (pas dans les sous-dossiers)."));
   return wrap;
 }
 
