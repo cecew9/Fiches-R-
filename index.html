@@ -46,12 +46,13 @@
 // ---------- Stockage ----------
 const STORAGE_KEY = "mes-fiches-data-v1";
 function loadData(){
-  let d = {decks:[], cards:[], dailyLimit:20};
+  let d = {decks:[], cards:[], dailyLimit:20, reviewMode:'flip'};
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) d = {...d, ...JSON.parse(raw)};
   }catch(e){}
   if(!d.dailyLimit) d.dailyLimit = 20;
+  if(!d.reviewMode) d.reviewMode = 'flip';
   return d;
 }
 function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
@@ -262,13 +263,16 @@ function dueCount(pool){
   const raw = pool.filter(isDue).length;
   return data.dailyLimit ? Math.min(raw, data.dailyLimit) : raw;
 }
+function buildModes(queue){
+  return queue.map(()=> data.reviewMode==='mixed' ? (Math.random()<0.5?'flip':'write') : data.reviewMode);
+}
 function startReview(deckId){
   const pool = deckId==='all' ? data.cards : cardsForDeck(deckId);
   if(pool.length===0) return;
   let due = pool.filter(isDue).sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
   if(data.dailyLimit && due.length > data.dailyLimit) due = due.slice(0, data.dailyLimit);
   const queue = shuffle(due.length>0?due:pool);
-  screen = {name:"review", queue, index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId};
+  screen = {name:"review", queue, modes:buildModes(queue), index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId};
   render();
 }
 function openDailyLimitPrompt(){
@@ -283,7 +287,7 @@ function startReviewWeak(deckId){
   const weak = pool.filter(c=>c.box===1);
   if(weak.length===0) return;
   const queue = shuffle(weak);
-  screen = {name:"review", queue, index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:false, deckId};
+  screen = {name:"review", queue, modes:buildModes(queue), index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:false, deckId};
   render();
 }
 function confirmDeleteDeck(deck){
@@ -305,6 +309,8 @@ function exportBackup(){
   a.download = `mes-fiches-sauvegarde-${todayStr()}.json`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
+  data.lastExportAt = Date.now();
+  saveData();
 }
 function importBackupFile(file){
   const reader = new FileReader();
@@ -379,6 +385,17 @@ function screenHome(){
     ? `${shownDue} à revoir aujourd'hui (+${rawDue - shownDue} en réserve)`
     : `${shownDue} à revoir aujourd'hui`;
   wrap.appendChild(h('p',{class:'small',style:{marginBottom:'24px'}}, total===0?"Créez un dossier pour commencer.":`${total} carte${total>1?'s':''} · ${dueLabel}`));
+
+  if(total>0){
+    const daysSinceExport = data.lastExportAt ? Math.floor((Date.now()-data.lastExportAt)/86400000) : null;
+    if(daysSinceExport===null || daysSinceExport>=3){
+      const reminderText = daysSinceExport===null ? "Tu n'as jamais exporté de sauvegarde." : `Dernière sauvegarde il y a ${daysSinceExport} jour${daysSinceExport>1?'s':''}.`;
+      wrap.appendChild(h('div',{style:{background:'#F6EBD8',border:'1px solid var(--red)',borderRadius:'12px',padding:'12px 14px',marginBottom:'20px',display:'flex',alignItems:'center',gap:'10px'}},[
+        h('div',{style:{flex:'1',fontSize:'13px',color:'var(--ink)'}}, reminderText + " Pense à exporter (Réglages ⚙) pour ne rien perdre."),
+        h('button',{style:{fontSize:'13px',color:'var(--red)',fontWeight:'600',whiteSpace:'nowrap'}, onclick:exportBackup}, 'Exporter')
+      ]));
+    }
+  }
 
   if(total>0){
     wrap.appendChild(h('button',{class:'btn-primary',style:{marginBottom:'24px',justifyContent:'space-between'}, onclick:()=>startReview('all')},[
@@ -589,11 +606,13 @@ function screenCardForm(deckId, cardId){
 }
 
 function screenReview(){
-  const {queue, index, showBack, correct, total, deckId, reviewedAllAnyway} = screen;
+  const {queue, index, total, deckId, reviewedAllAnyway} = screen;
   const card = queue[index];
   if(!card) return h('div');
+  const mode = screen.modes ? (screen.modes[index] || 'flip') : 'flip';
   const deck = data.decks.find(d=>d.id===card.deckId);
   const color = deck ? DECK_COLORS[deck.colorIdx%DECK_COLORS.length] : 'var(--ink)';
+  const deckLang = deck ? (deck.lang || 'fr-FR') : 'fr-FR';
 
   const wrap = h('div',{style:{display:'flex',flexDirection:'column',minHeight:'calc(100vh - 64px)'}});
   wrap.appendChild(h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'24px'}},[
@@ -605,11 +624,19 @@ function screenReview(){
     wrap.appendChild(h('div',{class:'small',style:{textAlign:'center',marginBottom:'16px'}}, "Rien n'est dû aujourd'hui — revue libre de toutes les cartes."));
   }
 
+  if(mode==='write'){
+    wrap.appendChild(renderWriteCard(card, color, deckLang));
+  } else {
+    wrap.appendChild(renderFlipCard(card, color, deckLang));
+  }
+  return wrap;
+}
+
+function renderFlipCard(card, color, deckLang){
+  const container = h('div',{style:{display:'flex',flexDirection:'column',flex:'1'}});
   const flipOuter = h('div',{class:'flip-outer'});
   const flipInner = h('div',{class:'flip-inner'});
   flipInner.onclick = ()=>{ flipInner.classList.toggle('flipped'); screen.showBack = flipInner.classList.contains('flipped'); renderAnswerZone(); };
-
-  const deckLang = deck ? (deck.lang || 'fr-FR') : 'fr-FR';
 
   const front = h('div',{class:'face face-front'},[
     h('div',{class:'rule'}),
@@ -637,7 +664,7 @@ function screenReview(){
   speak(card.recto, deckLang);
 
   const cardHolder = h('div',{style:{flex:'1',display:'flex',alignItems:'center',justifyContent:'center'}}, flipOuter);
-  wrap.appendChild(cardHolder);
+  container.appendChild(cardHolder);
 
   const answerZone = h('div',{style:{marginTop:'24px'}});
   function renderAnswerZone(){
@@ -655,8 +682,69 @@ function screenReview(){
     }
   }
   renderAnswerZone();
-  wrap.appendChild(answerZone);
-  return wrap;
+  container.appendChild(answerZone);
+  return container;
+}
+
+function normalizeForCompare(s){
+  return (s||'').toString().trim().replace(/\s+/g,' ');
+}
+
+function renderWriteCard(card, color, deckLang){
+  const container = h('div',{style:{display:'flex',flexDirection:'column',flex:'1'}});
+  const promptCard = h('div',{style:{background:'white',borderRadius:'18px',padding:'24px',marginBottom:'20px',border:`2px solid ${color}`}});
+  promptCard.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'10px',textAlign:'center'}}, 'Écris le mot correspondant à :'));
+  if(card.versoMode==='simple'){
+    promptCard.appendChild(h('div',{class:'mono',style:{textAlign:'center',fontSize:'16px'}}, card.versoText));
+  } else {
+    const fw = h('div',{style:{display:'flex',flexDirection:'column',gap:'10px'}});
+    card.versoFields.forEach(f=>{
+      const item = h('div',{style:{textAlign:'center'}});
+      if(f.label) item.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color}}, f.label));
+      item.appendChild(h('div',{class:'mono',style:{fontSize:'14px'}}, f.value));
+      fw.appendChild(item);
+    });
+    promptCard.appendChild(fw);
+  }
+  container.appendChild(promptCard);
+
+  const resultZone = h('div',{style:{marginBottom:'16px'}});
+  container.appendChild(resultZone);
+
+  const inputWrap = h('div',{style:{marginBottom:'16px'}});
+  const input = h('input',{class:'mono', style:{fontSize:'20px',textAlign:'center',background:'white',borderRadius:'12px',padding:'16px',display:'block',direction:'rtl'}, placeholder:'اكتب هنا...'});
+  input.setAttribute('autocapitalize','off');
+  input.setAttribute('autocorrect','off');
+  input.setAttribute('spellcheck','false');
+  inputWrap.appendChild(input);
+  container.appendChild(inputWrap);
+
+  const actionZone = h('div',{style:{marginTop:'auto'}});
+  container.appendChild(actionZone);
+
+  function renderCheckButton(){
+    actionZone.innerHTML='';
+    const btn = h('button',{class:'btn-primary', onclick:checkAnswer}, 'Vérifier');
+    actionZone.appendChild(btn);
+  }
+  function checkAnswer(){
+    const isCorrect = normalizeForCompare(input.value)===normalizeForCompare(card.recto);
+    resultZone.innerHTML='';
+    input.setAttribute('disabled','disabled');
+    resultZone.appendChild(h('div',{style:{textAlign:'center',padding:'14px',borderRadius:'12px',background: isCorrect?'#E4F0E3':'#F6E4E2',color: isCorrect?'var(--green)':'var(--red)',fontWeight:'600',marginBottom:'8px'}}, isCorrect ? 'Correct !' : 'Pas tout à fait...'));
+    if(!isCorrect){
+      resultZone.appendChild(h('div',{style:{textAlign:'center'}},[
+        h('div',{class:'small',style:{marginBottom:'4px'}}, 'Bonne orthographe :'),
+        h('div',{class:'mono',style:{fontSize:'20px'}}, card.recto)
+      ]));
+    }
+    actionZone.innerHTML='';
+    const btn = h('button',{class:'btn-primary', style:{background: isCorrect?'var(--green)':'var(--red)'}, onclick:()=>answer(isCorrect)}, 'Continuer');
+    actionZone.appendChild(btn);
+  }
+  renderCheckButton();
+  input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); if(!input.hasAttribute('disabled')) checkAnswer(); } });
+  return container;
 }
 
 function answer(known){
@@ -702,6 +790,25 @@ function screenSettings(){
     h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:openDailyLimitPrompt}, icon(ICONS.pencil,16))
   ]);
   wrap.appendChild(limitRow);
+
+  const modeLabels = {flip:'Cartes (recto/verso)', write:'Écriture', mixed:'Mixte (aléatoire)'};
+  const modeRow = h('div',{class:'card-row',style:{marginBottom:'8px'}},[
+    h('div',{style:{flex:'1'}},[
+      h('div',{style:{fontSize:'14px'}}, 'Mode de révision'),
+      h('div',{class:'small'}, modeLabels[data.reviewMode] || 'Cartes (recto/verso)')
+    ])
+  ]);
+  wrap.appendChild(modeRow);
+  const modeButtons = h('div',{style:{display:'flex',gap:'6px',marginBottom:'24px'}});
+  Object.entries(modeLabels).forEach(([key,label])=>{
+    modeButtons.appendChild(h('button',{
+      style:{flex:'1',padding:'8px 4px',borderRadius:'10px',fontSize:'12px',textAlign:'center',
+        background: data.reviewMode===key ? 'var(--ink)' : 'white', color: data.reviewMode===key ? 'var(--paper)' : 'var(--ink)'},
+      onclick:()=>{ data.reviewMode = key; saveData(); render(); }
+    }, label));
+  });
+  wrap.appendChild(modeButtons);
+  wrap.appendChild(h('div',{class:'small',style:{marginTop:'-16px',marginBottom:'24px'}}, "En mode Écriture ou Mixte, tu tapes le mot en arabe à partir de sa définition — une mauvaise orthographe compte comme non su."));
 
   wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Sauvegarde'));
   wrap.appendChild(h('p',{class:'small',style:{marginBottom:'12px'}}, "Tes fiches ne sont stockées que sur cet appareil. Exporte une sauvegarde régulièrement pour ne rien perdre, ou pour les transférer sur un autre appareil."));
