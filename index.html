@@ -269,7 +269,8 @@ function buildModes(queue){
 function startReview(deckId){
   const pool = deckId==='all' ? data.cards : cardsForDeck(deckId);
   if(pool.length===0) return;
-  let due = pool.filter(isDue).sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
+  let due = shuffle(pool.filter(isDue));
+  due.sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
   if(data.dailyLimit && due.length > data.dailyLimit) due = due.slice(0, data.dailyLimit);
   const queue = shuffle(due.length>0?due:pool);
   screen = {name:"review", queue, modes:buildModes(queue), index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId};
