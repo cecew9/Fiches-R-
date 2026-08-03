@@ -176,7 +176,7 @@ function rowsToCards(rows, deckId){
 }
 function normWord(s){ return (s||'').toString().trim(); }
 function dedupeCards(candidateCards, deckId){
-  const existing = new Set(data.cards.filter(c=>c.deckId===deckId).map(c=>normWord(c.recto)));
+  const existing = new Set(data.cards.map(c=>normWord(c.recto)));
   const kept = [];
   let skipped = 0;
   candidateCards.forEach(c=>{
@@ -312,6 +312,23 @@ function exportBackup(){
   setTimeout(()=>URL.revokeObjectURL(url), 1500);
   data.lastExportAt = Date.now();
   saveData();
+}
+function cleanupDuplicates(){
+  const seen = new Set();
+  const kept = [];
+  let removed = 0;
+  data.cards.forEach(c=>{
+    const key = normWord(c.recto);
+    if(seen.has(key)){ removed++; return; }
+    seen.add(key);
+    kept.push(c);
+  });
+  if(removed===0){ window.alert("Aucun doublon trouvé, tout est déjà propre !"); return; }
+  if(!window.confirm(`${removed} carte${removed>1?'s':''} en double détectée${removed>1?'s':''} (même mot au recto, quel que soit le dossier). La première occurrence de chaque mot sera gardée. Continuer ?`)) return;
+  data.cards = kept;
+  saveData();
+  render();
+  window.alert(`${removed} doublon${removed>1?'s':''} supprimé${removed>1?'s':''}.`);
 }
 function importBackupFile(file){
   const reader = new FileReader();
@@ -512,7 +529,7 @@ function screenDeck(deckId){
       screen = {name:'deck', deckId};
       render();
       let msg = count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune nouvelle carte importée.";
-      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} dans ce dossier, ignorée${skipped>1?'s':''})`;
+      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
       window.alert(msg);
     });
   };
@@ -819,6 +836,10 @@ function screenSettings(){
   importInput.onchange = ()=>{ const f = importInput.files[0]; if(f) importBackupFile(f); };
   wrap.appendChild(importInput);
   wrap.appendChild(h('button',{class:'btn-outline', onclick:()=>importInput.click()},[icon(ICONS.upload,18),'Importer une sauvegarde']));
+
+  wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px',marginTop:'24px'}}, 'Entretien'));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'12px'}}, "Supprime les cartes en double dans toute l'appli (même mot au recto, quel que soit le dossier)."));
+  wrap.appendChild(h('button',{class:'btn-outline',style:{borderColor:'var(--red)',color:'var(--red)'}, onclick:cleanupDuplicates}, 'Nettoyer les doublons'));
 
   return wrap;
 }
