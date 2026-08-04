@@ -705,7 +705,11 @@ function renderFlipCard(card, color, deckLang){
 }
 
 function normalizeForCompare(s){
-  return (s||'').toString().trim().replace(/\s+/g,' ');
+  return (s||'').toString()
+    .normalize('NFC')
+    .replace(/\u0640/g,'')
+    .trim()
+    .replace(/\s+/g,' ');
 }
 
 function renderWriteCard(card, color, deckLang){
