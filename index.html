@@ -187,6 +187,20 @@ function dedupeCards(candidateCards, deckId){
   });
   return {kept, skipped};
 }
+function importRowsToDeck(rows, deckId){
+  const candidates = rowsToCards(rows, deckId);
+  const {kept, skipped} = dedupeCards(candidates, deckId);
+  data.cards = data.cards.concat(kept);
+  saveData();
+  return {added: kept.length, skipped};
+}
+function importTextToDeck(text, deckId, onDone){
+  try{
+    const rows = parseCSV(text);
+    const {added, skipped} = importRowsToDeck(rows, deckId);
+    onDone(added, null, skipped);
+  }catch(err){ onDone(0, err); }
+}
 function importFileToDeck(file, deckId, onDone){
   const name = file.name.toLowerCase();
   const reader = new FileReader();
@@ -196,25 +210,15 @@ function importFileToDeck(file, deckId, onDone){
         const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-        const candidates = rowsToCards(rows, deckId);
-        const {kept, skipped} = dedupeCards(candidates, deckId);
-        data.cards = data.cards.concat(kept);
-        saveData();
-        onDone(kept.length, null, skipped);
+        const {added, skipped} = importRowsToDeck(rows, deckId);
+        onDone(added, null, skipped);
       }catch(err){ onDone(0, err); }
     };
     reader.onerror = ()=>onDone(0, true);
     reader.readAsArrayBuffer(file);
   } else {
     reader.onload = (e)=>{
-      try{
-        const rows = parseCSV(e.target.result);
-        const candidates = rowsToCards(rows, deckId);
-        const {kept, skipped} = dedupeCards(candidates, deckId);
-        data.cards = data.cards.concat(kept);
-        saveData();
-        onDone(kept.length, null, skipped);
-      }catch(err){ onDone(0, err); }
+      importTextToDeck(e.target.result, deckId, onDone);
     };
     reader.onerror = ()=>onDone(0, true);
     reader.readAsText(file, 'UTF-8');
@@ -535,7 +539,32 @@ function screenDeck(deckId){
   };
   wrap.appendChild(importInput);
   wrap.appendChild(h('button',{class:'btn-outline', style:{marginTop:'8px'}, onclick:()=>importInput.click()},[icon(ICONS.upload,18),'Importer un fichier (Excel/CSV)']));
+  wrap.appendChild(h('button',{class:'btn-outline', style:{marginTop:'8px'}, onclick:()=>{screen={name:'pasteImport',deckId}; render();}},[icon(ICONS.upload,18),'Coller du texte']));
   wrap.appendChild(h('div',{class:'small',style:{textAlign:'center',marginTop:'8px'}}, "Colonne A = recto, colonnes suivantes = verso (1 pour une définition simple, plusieurs pour des champs). 1ère ligne = titres. L'import se fait directement dans ce dossier (pas dans les sous-dossiers)."));
+  return wrap;
+}
+
+function screenPasteImport(deckId){
+  const deck = data.decks.find(d=>d.id===deckId);
+  const wrap = h('div');
+  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'deck',deckId}; render();}},[icon(ICONS.back,16),'Annuler']));
+  wrap.appendChild(h('h1',{class:'display',style:{fontSize:'22px',margin:'0 0 4px'}}, 'Coller du texte'));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'16px'}}, `Dans le dossier "${deck ? deck.name : ''}". Colle un tableau copié depuis Claude, Sheets ou Excel : colonne A = recto, colonnes suivantes = verso. 1ère ligne = titres.`));
+  const textarea = h('textarea',{rows:12, class:'mono', placeholder:"Mot,Sens,Exemple\nمَرْحَبًا,bonjour,مَرْحَبًا بِكَ", style:{fontSize:'13px',background:'white',borderRadius:'10px',padding:'12px',display:'block',width:'100%',marginBottom:'16px'}});
+  wrap.appendChild(textarea);
+  const btn = h('button',{class:'btn-primary', onclick:()=>{
+    const text = textarea.value.trim();
+    if(!text) return;
+    importTextToDeck(text, deckId, (count, err, skipped)=>{
+      if(err){ window.alert("Ce texte n'a pas pu être lu. Vérifie qu'il est bien séparé par des virgules, avec une 1ère ligne de titres."); return; }
+      screen = {name:'deck', deckId};
+      render();
+      let msg = count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune nouvelle carte importée.";
+      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
+      window.alert(msg);
+    });
+  }}, 'Importer');
+  wrap.appendChild(btn);
   return wrap;
 }
 
@@ -706,7 +735,7 @@ function renderFlipCard(card, color, deckLang){
 
 function normalizeForCompare(s){
   return (s||'').toString()
-    .normalize('NFC')
+    .normalize('NFKC')
     .replace(/\u0640/g,'')
     .trim()
     .replace(/\s+/g,' ');
@@ -911,6 +940,7 @@ function render(){
   if(screen.name==='home') node = screenHome();
   else if(screen.name==='deck') node = screenDeck(screen.deckId);
   else if(screen.name==='cardForm') node = screenCardForm(screen.deckId, screen.cardId);
+  else if(screen.name==='pasteImport') node = screenPasteImport(screen.deckId);
   else if(screen.name==='review') node = screenReview();
   else if(screen.name==='reviewSummary') node = screenSummary();
   else if(screen.name==='settings') node = screenSettings();
