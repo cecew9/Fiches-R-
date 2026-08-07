@@ -275,13 +275,32 @@ function buildModes(queue){
 }
 function startReview(deckId){
   const pool = deckId==='all' ? data.cards : cardsForDeck(deckId);
+  startReviewPool(pool, deckId);
+}
+function startReviewPool(pool, deckId){
   if(pool.length===0) return;
   let due = shuffle(pool.filter(isDue));
   due.sort((a,b)=> new Date(a.nextReview) - new Date(b.nextReview));
   if(data.dailyLimit && due.length > data.dailyLimit) due = due.slice(0, data.dailyLimit);
   const queue = shuffle(due.length>0?due:pool);
-  screen = {name:"review", queue, modes:buildModes(queue), index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId};
+  screen = {name:"review", queue, modes:buildModes(queue), index:0, showBack:false, correct:0, total:queue.length, reviewedAllAnyway:due.length===0, deckId:'all'};
   render();
+}
+function getAllDecksFlat(){
+  const list = [];
+  function walk(parentId, depth){
+    data.decks.filter(d => parentId===null ? !d.parentId : d.parentId===parentId).forEach(d=>{
+      list.push({deck:d, depth});
+      walk(d.id, depth+1);
+    });
+  }
+  walk(null, 0);
+  return list;
+}
+function poolForSelection(selectedIds){
+  const map = new Map();
+  selectedIds.forEach(id => cardsForDeck(id).forEach(c => map.set(c.id, c)));
+  return Array.from(map.values());
 }
 function openDailyLimitPrompt(){
   const current = data.dailyLimit || 20;
@@ -423,9 +442,12 @@ function screenHome(){
   }
 
   if(total>0){
-    wrap.appendChild(h('button',{class:'btn-primary',style:{marginBottom:'24px',justifyContent:'space-between'}, onclick:()=>startReview('all')},[
+    wrap.appendChild(h('button',{class:'btn-primary',style:{marginBottom:'24px',justifyContent:'space-between'}, onclick:()=>{
+      screen = {name:'bigTestSelect', selected: data.decks.map(d=>d.id)};
+      render();
+    }},[
       h('span',{style:{display:'flex',alignItems:'center',gap:'8px'}},[icon(ICONS.shuffle,18), h('span',{class:'display',style:{fontSize:'18px'}},'Grand test mélangé')]),
-      h('span',{style:{fontSize:'11px',opacity:'0.7'}},'tous les dossiers')
+      h('span',{style:{fontSize:'11px',opacity:'0.7'}},'choisir les dossiers')
     ]));
   }
 
@@ -814,6 +836,56 @@ function answer(known){
   render();
 }
 
+function screenBigTestSelect(){
+  const wrap = h('div');
+  const allDecks = getAllDecksFlat();
+  const allIds = allDecks.map(x=>x.deck.id);
+  const selected = new Set(screen.selected);
+
+  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'home'}; render();}},[icon(ICONS.back,16),'Accueil']));
+  wrap.appendChild(h('h1',{class:'display',style:{fontSize:'24px',margin:'0 0 4px'}}, 'Grand test'));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'16px'}}, "Choisis les dossiers à mélanger dans ce test."));
+
+  const allSelected = allIds.length>0 && allIds.every(id=>selected.has(id));
+  wrap.appendChild(h('button',{style:{fontSize:'14px',color:'var(--ink)',fontWeight:'600',marginBottom:'12px'}, onclick:()=>{
+    screen.selected = allSelected ? [] : allIds.slice();
+    render();
+  }}, allSelected ? 'Tout désélectionner' : 'Tout sélectionner'));
+
+  const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'90px'}});
+  if(allDecks.length===0){
+    list.appendChild(h('div',{class:'small'}, "Aucun dossier pour l'instant."));
+  }
+  allDecks.forEach(({deck, depth})=>{
+    const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
+    const count = cardsForDeck(deck.id).length;
+    const isChecked = selected.has(deck.id);
+    const row = h('div',{
+      style:{display:'flex',alignItems:'center',gap:'10px',background:'white',borderRadius:'10px',padding:'10px 12px',marginLeft:(depth*18)+'px',borderLeft:`4px solid ${color}`},
+      onclick:()=>{
+        if(isChecked) screen.selected = screen.selected.filter(id=>id!==deck.id);
+        else screen.selected = [...screen.selected, deck.id];
+        render();
+      }
+    });
+    row.appendChild(h('input',{type:'checkbox', style:{width:'18px',height:'18px'}, checked: isChecked ? 'checked' : undefined}));
+    row.appendChild(h('div',{style:{flex:'1',minWidth:'0',fontSize:'14px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, deck.name));
+    row.appendChild(h('div',{class:'small'}, `${count}`));
+    list.appendChild(row);
+  });
+  wrap.appendChild(list);
+
+  const poolCount = poolForSelection(screen.selected).length;
+  const bar = h('div',{style:{position:'fixed',bottom:'0',left:'0',right:'0',background:'var(--paper)',padding:'12px 16px calc(16px + env(safe-area-inset-bottom))',borderTop:'1px solid rgba(0,0,0,0.08)'}});
+  const startBtn = h('button',{class:'btn-primary', style:{maxWidth:'420px',margin:'0 auto',display:'flex'}, onclick:()=>{
+    if(poolCount===0) return;
+    startReviewPool(poolForSelection(screen.selected), 'all');
+  }}, poolCount>0 ? `Commencer le test (${poolCount} carte${poolCount>1?'s':''})` : 'Choisis au moins un dossier');
+  bar.appendChild(startBtn);
+  wrap.appendChild(bar);
+  return wrap;
+}
+
 function screenSummary(){
   const {correct, total, deckId} = screen;
   const pct = total>0 ? Math.round((correct/total)*100) : 0;
@@ -944,6 +1016,7 @@ function render(){
   else if(screen.name==='deck') node = screenDeck(screen.deckId);
   else if(screen.name==='cardForm') node = screenCardForm(screen.deckId, screen.cardId);
   else if(screen.name==='pasteImport') node = screenPasteImport(screen.deckId);
+  else if(screen.name==='bigTestSelect') node = screenBigTestSelect();
   else if(screen.name==='review') node = screenReview();
   else if(screen.name==='reviewSummary') node = screenSummary();
   else if(screen.name==='settings') node = screenSettings();
