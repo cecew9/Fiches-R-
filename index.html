@@ -131,7 +131,8 @@ const ICONS = {
   volume:'<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>',
   chart:'<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
-  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>'
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  move:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M9.5 12.5h5M12.5 10l2.5 2.5-2.5 2.5"/>'
 };
 
 // ---------- Import de fichier (CSV / Excel) ----------
@@ -181,27 +182,27 @@ function normWord(s){ return (s||'').toString().trim(); }
 function dedupeCards(candidateCards, deckId){
   const existing = new Set(data.cards.map(c=>normWord(c.recto)));
   const kept = [];
-  let skipped = 0;
+  const skippedWords = [];
   candidateCards.forEach(c=>{
     const key = normWord(c.recto);
-    if(existing.has(key)){ skipped++; return; }
+    if(existing.has(key)){ skippedWords.push(c.recto); return; }
     existing.add(key);
     kept.push(c);
   });
-  return {kept, skipped};
+  return {kept, skipped: skippedWords.length, skippedWords};
 }
 function importRowsToDeck(rows, deckId){
   const candidates = rowsToCards(rows, deckId);
-  const {kept, skipped} = dedupeCards(candidates, deckId);
+  const {kept, skipped, skippedWords} = dedupeCards(candidates, deckId);
   data.cards = data.cards.concat(kept);
   saveData();
-  return {added: kept.length, skipped};
+  return {added: kept.length, skipped, skippedWords};
 }
 function importTextToDeck(text, deckId, onDone){
   try{
     const rows = parseCSV(text);
-    const {added, skipped} = importRowsToDeck(rows, deckId);
-    onDone(added, null, skipped);
+    const {added, skipped, skippedWords} = importRowsToDeck(rows, deckId);
+    onDone(added, null, skipped, skippedWords);
   }catch(err){ onDone(0, err); }
 }
 function importFileToDeck(file, deckId, onDone){
@@ -213,8 +214,8 @@ function importFileToDeck(file, deckId, onDone){
         const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
-        const {added, skipped} = importRowsToDeck(rows, deckId);
-        onDone(added, null, skipped);
+        const {added, skipped, skippedWords} = importRowsToDeck(rows, deckId);
+        onDone(added, null, skipped, skippedWords);
       }catch(err){ onDone(0, err); }
     };
     reader.onerror = ()=>onDone(0, true);
@@ -289,7 +290,7 @@ function startReviewPool(pool, deckId){
 function getAllDecksFlat(){
   const list = [];
   function walk(parentId, depth){
-    data.decks.filter(d => parentId===null ? !d.parentId : d.parentId===parentId).forEach(d=>{
+    data.decks.filter(d => parentId===null ? !d.parentId : d.parentId===parentId).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'})).forEach(d=>{
       list.push({deck:d, depth});
       walk(d.id, depth+1);
     });
@@ -401,6 +402,7 @@ function deckTile(deck){
     langSelect.onchange = ()=>{ deck.lang = langSelect.value; saveData(); };
     btns.appendChild(langSelect);
     btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:(e)=>{e.stopPropagation(); openRenameDeck(deck);}}, icon(ICONS.pencil,16)));
+    btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--muted)'}, onclick:(e)=>{e.stopPropagation(); screen={name:'moveDeck', deckId:deck.id}; render();}}, icon(ICONS.move,16)));
     btns.appendChild(h('button',{class:'icon-btn',style:{color:'var(--red)'}, onclick:(e)=>{e.stopPropagation(); confirmDeleteDeck(deck);}}, icon(ICONS.trash,16)));
     tile.appendChild(btns);
   } else if(dueN>0){
@@ -412,7 +414,7 @@ function deckTile(deck){
 // ---------- Écrans ----------
 function screenHome(){
   const wrap = h('div');
-  const topDecks = data.decks.filter(d=>!d.parentId);
+  const topDecks = data.decks.filter(d=>!d.parentId).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'}));
   const headRow = h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'4px'}},[
     h('h1',{class:'display',style:{fontSize:'30px',margin:0}},'Mes fiches'),
     h('div',{style:{display:'flex',gap:'6px',alignItems:'center'}},[
@@ -492,7 +494,7 @@ function screenDeck(deckId){
   const deck = data.decks.find(d=>d.id===deckId);
   if(!deck){ screen={name:'home'}; return screenHome(); }
   const color = DECK_COLORS[deck.colorIdx%DECK_COLORS.length];
-  const children = data.decks.filter(d=>d.parentId===deckId);
+  const children = data.decks.filter(d=>d.parentId===deckId).sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base'}));
   const directCards = data.cards.filter(c=>c.deckId===deckId);
   const allCards = cardsForDeck(deckId);
   const due = dueCount(allCards);
@@ -553,12 +555,15 @@ function screenDeck(deckId){
   importInput.onchange = ()=>{
     const file = importInput.files[0];
     if(!file) return;
-    importFileToDeck(file, deckId, (count, err, skipped)=>{
+    importFileToDeck(file, deckId, (count, err, skipped, skippedWords)=>{
       if(err){ window.alert("Le fichier n'a pas pu être lu. Vérifie qu'il s'agit bien d'un fichier CSV ou Excel, avec une 1ère ligne de titres."); return; }
       screen = {name:'deck', deckId};
       render();
       let msg = count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune nouvelle carte importée.";
-      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
+      if(skipped>0){
+        msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
+        if(skippedWords && skippedWords.length) msg += `\n\nMots ignorés (doublons détectés) :\n` + skippedWords.slice(0,15).join('\n') + (skippedWords.length>15 ? `\n... (+${skippedWords.length-15} autres)` : '');
+      }
       window.alert(msg);
     });
   };
@@ -580,12 +585,15 @@ function screenPasteImport(deckId){
   const btn = h('button',{class:'btn-primary', onclick:()=>{
     const text = textarea.value.trim();
     if(!text) return;
-    importTextToDeck(text, deckId, (count, err, skipped)=>{
+    importTextToDeck(text, deckId, (count, err, skipped, skippedWords)=>{
       if(err){ window.alert("Ce texte n'a pas pu être lu. Vérifie qu'il est bien séparé par des virgules, avec une 1ère ligne de titres."); return; }
       screen = {name:'deck', deckId};
       render();
       let msg = count>0 ? `${count} carte${count>1?'s':''} importée${count>1?'s':''} !` : "Aucune nouvelle carte importée.";
-      if(skipped>0) msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
+      if(skipped>0){
+        msg += ` (${skipped} déjà présente${skipped>1?'s':''} ailleurs dans l'appli, ignorée${skipped>1?'s':''})`;
+        if(skippedWords && skippedWords.length) msg += `\n\nMots ignorés (doublons détectés) :\n` + skippedWords.slice(0,15).join('\n') + (skippedWords.length>15 ? `\n... (+${skippedWords.length-15} autres)` : '');
+      }
       window.alert(msg);
     });
   }}, 'Importer');
@@ -886,6 +894,52 @@ function screenBigTestSelect(){
   return wrap;
 }
 
+function screenMoveDeck(deckId){
+  const deck = data.decks.find(d=>d.id===deckId);
+  const wrap = h('div');
+  if(!deck){ screen={name:'home'}; render(); return wrap; }
+  wrap.appendChild(h('button',{style:{display:'flex',alignItems:'center',gap:'4px',fontSize:'14px',color:'var(--muted)',marginBottom:'16px'}, onclick:()=>{screen={name:'home'}; render();}},[icon(ICONS.back,16),'Annuler']));
+  wrap.appendChild(h('h1',{class:'display',style:{fontSize:'22px',margin:'0 0 4px'}}, 'Déplacer un dossier'));
+  wrap.appendChild(h('p',{class:'small',style:{marginBottom:'16px'}}, `Choisis où ranger "${deck.name}".`));
+
+  const excluded = new Set(getDescendantDeckIds(deckId)); // le dossier lui-même + ses sous-dossiers
+  const allDecks = getAllDecksFlat();
+
+  function moveTo(newParentId){
+    deck.parentId = newParentId;
+    saveData();
+    manageMode = false;
+    screen = {name:'home'};
+    render();
+  }
+
+  const list = h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}});
+  const rootOption = h('div',{
+    style:{display:'flex',alignItems:'center',gap:'10px',background:'white',borderRadius:'10px',padding:'12px',opacity: deck.parentId ? '1' : '0.5'},
+    onclick: deck.parentId ? ()=>moveTo(null) : undefined
+  },[
+    h('div',{style:{flex:'1',fontSize:'14px'}}, '📁 Racine (aucun dossier parent)'),
+    !deck.parentId ? h('div',{class:'small'}, 'actuel') : null
+  ]);
+  list.appendChild(rootOption);
+
+  allDecks.forEach(({deck: d, depth})=>{
+    if(excluded.has(d.id)) return; // on ne peut pas déplacer un dossier dans lui-même ou l'un de ses sous-dossiers
+    const color = DECK_COLORS[d.colorIdx%DECK_COLORS.length];
+    const isCurrent = deck.parentId === d.id;
+    const row = h('div',{
+      style:{display:'flex',alignItems:'center',gap:'10px',background:'white',borderRadius:'10px',padding:'10px 12px',marginLeft:(depth*18)+'px',borderLeft:`4px solid ${color}`,opacity:isCurrent?'0.5':'1'},
+      onclick: isCurrent ? undefined : ()=>moveTo(d.id)
+    },[
+      h('div',{style:{flex:'1',minWidth:'0',fontSize:'14px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, d.name),
+      isCurrent ? h('div',{class:'small'}, 'actuel') : null
+    ]);
+    list.appendChild(row);
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function screenSummary(){
   const {correct, total, deckId} = screen;
   const pct = total>0 ? Math.round((correct/total)*100) : 0;
@@ -1017,6 +1071,7 @@ function render(){
   else if(screen.name==='cardForm') node = screenCardForm(screen.deckId, screen.cardId);
   else if(screen.name==='pasteImport') node = screenPasteImport(screen.deckId);
   else if(screen.name==='bigTestSelect') node = screenBigTestSelect();
+  else if(screen.name==='moveDeck') node = screenMoveDeck(screen.deckId);
   else if(screen.name==='review') node = screenReview();
   else if(screen.name==='reviewSummary') node = screenSummary();
   else if(screen.name==='settings') node = screenSettings();
