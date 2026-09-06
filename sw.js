@@ -1,7 +1,12 @@
-const CACHE_NAME = 'mesfiches-v1';
+const CACHE_NAME = 'mesfiches-v2';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
+  e.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(['./', './index.html']).catch(() => {});
+    })
+  );
 });
 
 self.addEventListener('activate', (e) => {
