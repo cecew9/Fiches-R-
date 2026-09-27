@@ -49,13 +49,14 @@
 // ---------- Stockage ----------
 const STORAGE_KEY = "mes-fiches-data-v1";
 function loadData(){
-  let d = {decks:[], cards:[], dailyLimit:20, reviewMode:'flip'};
+  let d = {decks:[], cards:[], dailyLimit:20, reviewMode:'flip', writeInputMode:'keyboard'};
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) d = {...d, ...JSON.parse(raw)};
   }catch(e){}
   if(!d.dailyLimit) d.dailyLimit = 20;
   if(!d.reviewMode) d.reviewMode = 'flip';
+  if(!d.writeInputMode) d.writeInputMode = 'keyboard';
   return d;
 }
 function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
@@ -781,19 +782,27 @@ function renderWriteCard(card, color, deckLang){
   if(card.versoMode==='simple'){
     promptCard.appendChild(h('div',{class:'mono',style:{textAlign:'center',fontSize:'16px'}}, card.versoText));
   } else {
-    const fw = h('div',{style:{display:'flex',flexDirection:'column',gap:'10px'}});
-    card.versoFields.forEach(f=>{
-      const item = h('div',{style:{textAlign:'center'}});
-      if(f.label) item.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color}}, f.label));
-      item.appendChild(h('div',{class:'mono',style:{fontSize:'14px'}}, f.value));
-      fw.appendChild(item);
-    });
-    promptCard.appendChild(fw);
+    // On ne montre que le champ "Sens" : les autres champs (pluriel, formes verbales,
+    // exemple, nuance...) contiennent souvent le mot lui-même ou sa racine, ce qui
+    // donnerait la réponse avant même d'avoir essayé d'écrire.
+    const sensField = card.versoFields.find(f => (f.label||'').trim().toLowerCase()==='sens') || card.versoFields[0];
+    const item = h('div',{style:{textAlign:'center'}});
+    if(sensField.label) item.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color}}, sensField.label));
+    item.appendChild(h('div',{class:'mono',style:{fontSize:'14px'}}, sensField.value));
+    promptCard.appendChild(item);
   }
   container.appendChild(promptCard);
 
   const resultZone = h('div',{style:{marginBottom:'16px'}});
   container.appendChild(resultZone);
+
+  if(data.writeInputMode==='handwrite'){
+    return renderHandwriteBody(container, resultZone, card, color, deckLang);
+  }
+  return renderKeyboardBody(container, resultZone, card, color, deckLang);
+}
+
+function renderKeyboardBody(container, resultZone, card, color, deckLang){
 
   const inputWrap = h('div',{style:{marginBottom:'16px'}});
   const input = h('input',{class:'mono', style:{fontSize:'20px',textAlign:'center',background:'white',borderRadius:'12px',padding:'16px',display:'block',direction:'rtl'}, placeholder:'اكتب هنا...'});
@@ -828,6 +837,82 @@ function renderWriteCard(card, color, deckLang){
   }
   renderCheckButton();
   input.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); if(!input.hasAttribute('disabled')) checkAnswer(); } });
+  return container;
+}
+
+function renderHandwriteBody(container, resultZone, card, color, deckLang){
+  const canvasWrap = h('div',{style:{background:'white',borderRadius:'12px',border:'2px solid var(--ink)',marginBottom:'12px',overflow:'hidden',touchAction:'none'}});
+  const canvas = h('canvas',{style:{display:'block',width:'100%',height:'220px'}});
+  canvasWrap.appendChild(canvas);
+  container.appendChild(canvasWrap);
+
+  function sizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = rect.width * ratio;
+    canvas.height = rect.height * ratio;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1a1a1a';
+  }
+  setTimeout(sizeCanvas, 0);
+
+  let drawing = false, lastX=0, lastY=0;
+  function posFromEvent(e){
+    const rect = canvas.getBoundingClientRect();
+    const t = (e.touches && e.touches[0]) ? e.touches[0] : e;
+    return {x: t.clientX-rect.left, y: t.clientY-rect.top};
+  }
+  function start(e){ e.preventDefault(); drawing=true; const p=posFromEvent(e); lastX=p.x; lastY=p.y; }
+  function move(e){
+    if(!drawing) return;
+    e.preventDefault();
+    const p = posFromEvent(e);
+    const ctx = canvas.getContext('2d');
+    ctx.beginPath(); ctx.moveTo(lastX,lastY); ctx.lineTo(p.x,p.y); ctx.stroke();
+    lastX=p.x; lastY=p.y;
+  }
+  function end(){ drawing=false; }
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', end);
+  canvas.addEventListener('touchstart', start, {passive:false});
+  canvas.addEventListener('touchmove', move, {passive:false});
+  canvas.addEventListener('touchend', end);
+
+  const toolRow = h('div',{style:{display:'flex',justifyContent:'center',marginBottom:'16px'}});
+  toolRow.appendChild(h('button',{class:'btn-outline',style:{fontSize:'13px',padding:'8px 16px'}, onclick:()=>{
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+  }},[icon(ICONS.trash,14),'Effacer']));
+  container.appendChild(toolRow);
+
+  const actionZone = h('div',{style:{marginTop:'auto'}});
+  container.appendChild(actionZone);
+
+  function renderRevealButton(){
+    actionZone.innerHTML='';
+    actionZone.appendChild(h('button',{class:'btn-primary', onclick:reveal}, 'Voir la réponse'));
+  }
+  function reveal(){
+    resultZone.innerHTML='';
+    resultZone.appendChild(h('div',{style:{textAlign:'center'}},[
+      h('div',{class:'small',style:{marginBottom:'4px'}}, 'Bonne orthographe :'),
+      h('div',{class:'mono',style:{fontSize:'24px'}}, card.recto)
+    ]));
+    actionZone.innerHTML='';
+    const row = h('div',{style:{display:'flex',gap:'12px'}});
+    const btnNo = h('button',{class:'btn-primary',style:{background:'var(--red)',flex:'1'}},[icon(ICONS.x,18),'Pas su']);
+    const btnYes = h('button',{class:'btn-primary',style:{background:'var(--green)',flex:'1'}},[icon(ICONS.check,18),'Su']);
+    btnNo.onclick = ()=>answer(false);
+    btnYes.onclick = ()=>answer(true);
+    row.appendChild(btnNo); row.appendChild(btnYes);
+    actionZone.appendChild(row);
+  }
+  renderRevealButton();
   return container;
 }
 
@@ -988,7 +1073,28 @@ function screenSettings(){
     }, label));
   });
   wrap.appendChild(modeButtons);
-  wrap.appendChild(h('div',{class:'small',style:{marginTop:'-16px',marginBottom:'24px'}}, "En mode Écriture ou Mixte, tu tapes le mot en arabe à partir de sa définition — une mauvaise orthographe compte comme non su."));
+  wrap.appendChild(h('div',{class:'small',style:{marginTop:'-16px',marginBottom:'24px'}}, "En mode Écriture ou Mixte, tu écris le mot en arabe à partir de sa définition — une mauvaise orthographe compte comme non su."));
+
+  if(data.reviewMode!=='flip'){
+    const inputModeLabels = {keyboard:'Clavier', handwrite:'Manuscrit (à la main)'};
+    const inputModeRow = h('div',{class:'card-row',style:{marginBottom:'8px'}},[
+      h('div',{style:{flex:'1'}},[
+        h('div',{style:{fontSize:'14px'}}, "Façon d'écrire"),
+        h('div',{class:'small'}, inputModeLabels[data.writeInputMode] || 'Clavier')
+      ])
+    ]);
+    wrap.appendChild(inputModeRow);
+    const inputModeButtons = h('div',{style:{display:'flex',gap:'6px',marginBottom:'8px'}});
+    Object.entries(inputModeLabels).forEach(([key,label])=>{
+      inputModeButtons.appendChild(h('button',{
+        style:{flex:'1',padding:'8px 4px',borderRadius:'10px',fontSize:'12px',textAlign:'center',
+          background: data.writeInputMode===key ? 'var(--ink)' : 'white', color: data.writeInputMode===key ? 'var(--paper)' : 'var(--ink)'},
+        onclick:()=>{ data.writeInputMode = key; saveData(); render(); }
+      }, label));
+    });
+    wrap.appendChild(inputModeButtons);
+    wrap.appendChild(h('div',{class:'small',style:{marginBottom:'24px'}}, "En manuscrit, tu écris avec le doigt sur l'écran, puis tu compares toi-même avec la bonne orthographe (pas de correction automatique possible pour l'écriture à la main)."));
+  }
 
   wrap.appendChild(h('div',{style:{fontSize:'11px',textTransform:'uppercase',letterSpacing:'.05em',color:'var(--muted)',marginBottom:'8px'}}, 'Sauvegarde'));
   wrap.appendChild(h('p',{class:'small',style:{marginBottom:'12px'}}, "Tes fiches ne sont stockées que sur cet appareil. Exporte une sauvegarde régulièrement pour ne rien perdre, ou pour les transférer sur un autre appareil."));
